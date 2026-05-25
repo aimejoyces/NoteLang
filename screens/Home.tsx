@@ -5,8 +5,11 @@ import {
     collection,
     deleteDoc,
     doc,
+    getDoc,
     onSnapshot,
     query,
+    serverTimestamp,
+    setDoc,
     where
 } from 'firebase/firestore';
 import React, { useCallback, useEffect, useState } from 'react';
@@ -54,32 +57,79 @@ export default function HomeScreen() {
   useEffect(() => {
     let unsubscribeProfile: () => void = () => {};
     let unsubscribeNotes: () => void = () => {};
+    let isActive = true;
 
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        // Real-time listener for user profile
-        const userDocRef = doc(db, "users", user.uid);
+    const attachListeners = async (user: NonNullable<typeof auth.currentUser>) => {
+      try {
+        console.log('[Home] Refreshing auth token for:', user.uid);
+        const token = await user.getIdToken(true);
+        console.log('[Home] Token refreshed:', !!token, 'uid:', user.uid);
+
+        if (!isActive) {
+          return;
+        }
+
+        console.log('[Home] Attaching listeners for user:', user.uid);
+
+        const userDocRef = doc(db, 'users', user.uid);
+        console.log('[Home] Profile doc path:', userDocRef.path);
+
+        const existingUserDoc = await getDoc(userDocRef);
+        if (!existingUserDoc.exists()) {
+          console.log('[Home] Creating missing profile doc for:', user.uid);
+          await setDoc(userDocRef, {
+            firstName: '',
+            lastName: '',
+            email: user.email || '',
+            createdAt: serverTimestamp(),
+          });
+        }
+
         unsubscribeProfile = onSnapshot(userDocRef, (userDoc) => {
+          console.log('[Home] Profile snapshot:', {
+            exists: userDoc.exists(),
+            path: userDoc.ref.path,
+            data: userDoc.data(),
+          });
+
           if (userDoc.exists()) {
             setFirstName(userDoc.data().firstName || '');
           }
         }, (error) => {
-          console.error("Profile listener error:", error);
+          console.error('[Home] Profile listener error:', {
+            code: error?.code,
+            message: error?.message,
+            name: error?.name,
+          });
         });
 
-        // Real-time listener for notes (removed orderBy to avoid index permission issues)
         const q = query(
           collection(db, 'notes'),
           where('userId', '==', user.uid)
         );
 
+        console.log('[Home] Notes query:', q);
         unsubscribeNotes = onSnapshot(q, (snapshot) => {
+          console.log('[Home] Notes snapshot count:', snapshot.size);
+
           const notesList: Note[] = [];
           snapshot.forEach((doc) => {
-            notesList.push({ id: doc.id, ...doc.data() } as Note);
+            const data = doc.data();
+            console.log('[Home] Note doc:', {
+              id: doc.id,
+              path: doc.ref.path,
+              userId: data.userId,
+              titleType: typeof data.title,
+              bodyType: typeof data.body,
+              createdAtType: typeof data.createdAt,
+              updatedAtType: typeof data.updatedAt,
+              createdAtValue: data.createdAt,
+              updatedAtValue: data.updatedAt,
+            });
+
+            notesList.push({ id: doc.id, ...data } as Note);
           });
-          
-          // Sort client-side by updatedAt desc
+
           notesList.sort((a, b) => {
             const timeA = a.updatedAt?.toMillis ? a.updatedAt.toMillis() : (a.updatedAt || 0);
             const timeB = b.updatedAt?.toMillis ? b.updatedAt.toMillis() : (b.updatedAt || 0);
@@ -89,15 +139,45 @@ export default function HomeScreen() {
           setNotes(notesList);
           setLoading(false);
         }, (error) => {
-          console.error("Notes listener error:", error);
+          console.error('[Home] Notes listener error:', {
+            code: error?.code,
+            message: error?.message,
+            name: error?.name,
+          });
           setLoading(false);
         });
-      } else {
+      } catch (error) {
+        console.error('[Home] Failed to refresh auth token before attaching listeners:', error);
         setLoading(false);
       }
+    };
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      console.log('[Home] onAuthStateChanged fired:', {
+        hasUser: !!user,
+        uid: user?.uid || null,
+        email: user?.email || null,
+      });
+
+      if (!user) {
+        console.warn('[Home] No authenticated user found; clearing Firestore listeners.');
+        unsubscribeProfile();
+        unsubscribeNotes();
+        unsubscribeProfile = () => {};
+        unsubscribeNotes = () => {};
+        setLoading(false);
+        return;
+      }
+
+      unsubscribeProfile();
+      unsubscribeNotes();
+      unsubscribeProfile = () => {};
+      unsubscribeNotes = () => {};
+      attachListeners(user);
     });
 
     return () => {
+      isActive = false;
       unsubscribeAuth();
       unsubscribeProfile();
       unsubscribeNotes();
