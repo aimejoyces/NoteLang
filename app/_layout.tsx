@@ -1,24 +1,70 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import 'react-native-reanimated';
+import { Stack, useRouter, useSegments } from 'expo-router';
+import { onAuthStateChanged } from 'firebase/auth';
+import React, { useEffect, useState } from 'react';
+import LoadingScreen from '../components/Loading';
+import { ThemeProvider } from '../context/Theme';
+import { auth } from '../services/firebase';
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
+function InitialLayout() {
+  const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState<any>(null);
+  const router = useRouter();
+  const segments = useSegments();
 
-export const unstable_settings = {
-  anchor: '(tabs)',
-};
+  useEffect(() => {
+    setUser(auth.currentUser);
 
-export default function RootLayout() {
-  const colorScheme = useColorScheme();
+    const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
+      setUser(nextUser);
+      setAuthReady(true);
+    });
+
+    setAuthReady(true);
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!authReady) {
+      return;
+    }
+
+    const isAuthRoute =
+      segments[0] === 'screens' &&
+      (segments[1] === 'login' || segments[1] === 'register');
+    const isWelcomeRoute = segments[0] !== 'screens';
+    const isProtectedRoute =
+      segments[0] === 'screens' &&
+      segments[1] !== 'login' &&
+      segments[1] !== 'register';
+
+    if (user && (isAuthRoute || isWelcomeRoute)) {
+      router.replace('/screens/home');
+    } else if (!user && isProtectedRoute) {
+      router.replace('/');
+    }
+  }, [authReady, router, segments, user]);
+
+  if (!authReady) {
+    return <LoadingScreen />;
+  }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-      <StatusBar style="auto" />
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="index" options={{ headerShown: false }} />
+      <Stack.Screen name="screens/login" options={{ headerShown: false }} />
+      <Stack.Screen name="screens/register" options={{ headerShown: false }} />
+      <Stack.Screen name="screens/home" options={{ headerShown: false }} />
+      <Stack.Screen name="screens/profile" options={{ headerShown: false }} />
+      <Stack.Screen name="screens/add-edit" options={{ headerShown: false }} />
+    </Stack>
+  );
+}
+
+export default function RootLayout() {
+  return (
+    <ThemeProvider>
+      <InitialLayout />
     </ThemeProvider>
   );
 }
